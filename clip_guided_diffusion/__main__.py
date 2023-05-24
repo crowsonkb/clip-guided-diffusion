@@ -54,6 +54,8 @@ def download_file(url, root, expected_sha256):
 
 
 def save_image(image, path):
+    if isinstance(image, torch.Tensor):
+        image = K.utils.to_pil_image(image)
     image.save(path)
 
 
@@ -314,6 +316,9 @@ def main():
         "--output", "-o", type=Path, default=Path("out.png"), help="the output file"
     )
     p.add_argument(
+        "--save-all", action="store_true", help="save all intermediate denoised images"
+    )
+    p.add_argument(
         "--size", type=int, nargs=2, default=(512, 512), help="the output size"
     )
     p.add_argument(
@@ -376,15 +381,14 @@ def main():
 
     # Set up callback
     class Callback:
-        def __init__(self):
-            self.pbar = None
-
         def __enter__(self):
+            self.ex = futures.ThreadPoolExecutor()
             self.pbar = tqdm()
             return self
 
         def __exit__(self, exc_type, exc_value, traceback):
             self.pbar.close()
+            self.ex.shutdown()
 
         def __call__(self, info):
             self.pbar.update(1)
@@ -393,8 +397,11 @@ def main():
             sigma_next = info["sigma_next"].item()
             h = math.log(sigma / sigma_next)
             print(f"step {i}, sigma: {sigma:g}, h: {h:g}")
+            if args.save_all:
+                path = args.output.with_stem(args.output.stem + f"_{i:05}")
+                self.ex.submit(save_image, info["denoised"][0], path)
 
-    with futures.ThreadPoolExecutor() as ex, Callback() as cb:
+    with Callback() as cb:
         # Draw random noise
         torch.manual_seed(args.seed)
         x = torch.randn([1, 3, args.size[1], args.size[0]], device=device) * sigma_max
@@ -418,7 +425,7 @@ def main():
 
             # Save the image
             print(f"Saving to {args.output}...")
-            ex.submit(save_image, K.utils.to_pil_image(samples[0]), args.output)
+            save_image(samples[0], args.output)
         except KeyboardInterrupt:
             print("Interrupted")
 

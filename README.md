@@ -59,6 +59,8 @@ The total amount of time simulated for the OpenAI diffusion models is 9.66387, s
 
 - `--output`, `-o`: the output file (default: out.png)
 
+- `--save-all`: save all intermediate denoised images (default: False)
+
 - `--size`: the output size (default: (512, 512))
 
 Image size is specified as (width, height).
