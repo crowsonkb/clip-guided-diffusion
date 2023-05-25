@@ -184,6 +184,15 @@ def sample_dpm_guided(
     def phi_1(x):
         return torch.expm1(-x)
 
+    def h_for_max_cond(t, cond_norm, max_cond):
+        # This returns the h that should be used for the given cond_scale norm to keep
+        # the norm of its contribution to a step below max_cond at a given t.
+        # Its return type is complex, be sure to handle it appropriately.
+        ssq = t_to_sigma(t) ** 2
+        ratio = (cond_norm / max_cond) + 0j
+        tmp = (ratio * ssq - ratio.sqrt() * (ratio - 4 / ssq).sqrt() * ssq) / 2
+        return tmp.log() / 2
+
     # Set up constants
     sigma_min = torch.tensor(sigma_min, device=x.device)
     sigma_max = torch.tensor(sigma_max, device=x.device)
@@ -204,11 +213,8 @@ def sample_dpm_guided(
         denoised, cond_score = model(x, sigma * s_in)
 
         # Scale step size down if cond_score is too large
-        cond_norm = cond_score.pow(2).mean().sqrt()
-        step_ratio = (
-            cond_norm * t_to_sigma(t + max_h) ** 2 * -phi_1(2 * max_h) / max_cond
-        )
-        h = max_h / (step_ratio + 1)
+        cond_norm = cond_score.pow(2).mean().sqrt() + 1e-8
+        h = h_for_max_cond(t, cond_norm, max_cond).abs().clamp(max=max_h)
         t_next = torch.minimum(t + h, t_end)
         h = t_next - t
         sigma_next = t_to_sigma(t_next)
