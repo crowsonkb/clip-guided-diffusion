@@ -25,7 +25,7 @@ clip_guided_diffusion "A beautiful fantasy painting of the wind by Wojciech Siud
 
 - `--checkpoint`: the diffusion model checkpoint to load (default: None)
 
-The diffusion model this repo uses if none is specified is https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_finetune_008100.pt, which is the 512x512 OpenAI ImageNet diffusion model fine-tuned for 8100 steps to remove the class conditioning. Its SHA-256 hash is `9c111ab89e214862b76e1fa6a1b3f1d329b1a88281885943d2cdbe357ad57648`. It will auto-download it on first run.
+The diffusion model this repo uses if none is specified is https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_finetune_008100.safetensors, which is the 512x512 OpenAI ImageNet diffusion model fine-tuned for 8100 steps to remove the class conditioning. Its SHA-256 hash is `02e212cbec7c9012eb12cd63fef6fa97640b4e8fcd6c6e1f410a52eea1925fe1`. It will auto-download it on first run.
 
 - `--clip-model`: the CLIP model to use (default: ViT-B/16)
 
@@ -76,8 +76,6 @@ The higher order solvers are [linear multistep methods](https://en.wikipedia.org
 - `--seed`: the random seed (default: 0)
 
 ## To do
-
-- Save intermediate iterates
 
 - Multiple prompts
 

@@ -13,6 +13,7 @@ import requests
 from rich import print
 from rich.align import Align
 from rich.panel import Panel
+import safetensors.torch
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -81,8 +82,11 @@ def load_diffusion_model(model_path, device="cpu"):
         }
     )
     model, diffusion = script_util.create_model_and_diffusion(**model_config)
-    model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.requires_grad_(False).eval().to(device)
+    if Path(model_path).suffix == ".safetensors":
+        safetensors.torch.load_model(model, model_path)
+    else:
+        model.load_state_dict(torch.load(model_path, map_location="cpu"))
     if model_config["use_fp16"]:
         model.convert_to_fp16()
     model_wrap = K.external.OpenAIDenoiser(model, diffusion, device=device)
@@ -349,9 +353,9 @@ def main():
     checkpoint = args.checkpoint
     if checkpoint is None:
         checkpoint = download_file(
-            url="https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_finetune_008100.pt",
+            url="https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_finetune_008100.safetensors",
             root=Path(torch.hub.get_dir()) / "checkpoints" / "rivershavewings",
-            expected_sha256="9c111ab89e214862b76e1fa6a1b3f1d329b1a88281885943d2cdbe357ad57648",
+            expected_sha256="02e212cbec7c9012eb12cd63fef6fa97640b4e8fcd6c6e1f410a52eea1925fe1",
         )
     model = load_diffusion_model(checkpoint, device=device)
     sigma_min, sigma_max = model.sigmas[0].item(), model.sigmas[-1].item()
