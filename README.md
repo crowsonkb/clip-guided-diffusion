@@ -57,6 +57,8 @@ This option sets the maximum step size. It mostly controls the step size at the 
 
 The total amount of time simulated for the OpenAI diffusion models is 9.66387, so setting max_h to 0.1 will do no fewer than 97 steps. At any point in the noise schedule, it is not allowed to take steps larger than a 97 step exponential schedule would.
 
+- `--model-type`: the diffusion model type (eps or v) (default: eps)
+
 - `--output`, `-o`: the output file (default: out.png)
 
 - `--save-all`: save all intermediate denoised images (default: False)

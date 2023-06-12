@@ -60,7 +60,26 @@ def save_image(image, path):
     image.save(path)
 
 
-def load_diffusion_model(model_path, device="cpu"):
+class OpenAIVDenoiser(K.external.DiscreteVDDPMDenoiser):
+    """A wrapper for OpenAI v objective diffusion models."""
+
+    def __init__(
+        self, model, diffusion, quantize=False, has_learned_sigmas=True, device="cpu"
+    ):
+        alphas_cumprod = torch.tensor(
+            diffusion.alphas_cumprod, device=device, dtype=torch.float32
+        )
+        super().__init__(model, alphas_cumprod, quantize=quantize)
+        self.has_learned_sigmas = has_learned_sigmas
+
+    def get_v(self, *args, **kwargs):
+        model_output = self.inner_model(*args, **kwargs)
+        if self.has_learned_sigmas:
+            return model_output.chunk(2, dim=1)[0]
+        return model_output
+
+
+def load_diffusion_model(model_path, device="cpu", model_type="eps"):
     model_config = script_util.model_and_diffusion_defaults()
     model_config.update(
         {
@@ -89,8 +108,12 @@ def load_diffusion_model(model_path, device="cpu"):
         model.load_state_dict(torch.load(model_path, map_location="cpu"))
     if model_config["use_fp16"]:
         model.convert_to_fp16()
-    model_wrap = K.external.OpenAIDenoiser(model, diffusion, device=device)
-    return model_wrap
+    if model_type == "eps":
+        return K.external.OpenAIDenoiser(model, diffusion, device=device)
+    elif model_type == "v":
+        return OpenAIVDenoiser(model, diffusion, device=device)
+    else:
+        raise ValueError(f"Unknown model type {model_type}")
 
 
 def batch_crop(x, out_size, corners, mode="bilinear", padding_mode="zeros"):
@@ -320,6 +343,13 @@ def main():
         help="the maximum step size",
     )
     p.add_argument(
+        "--model-type",
+        type=str,
+        choices=["eps", "v"],
+        default="eps",
+        help="the model type",
+    )
+    p.add_argument(
         "--output", "-o", type=Path, default=Path("out.png"), help="the output file"
     )
     p.add_argument(
@@ -357,7 +387,7 @@ def main():
             root=Path(torch.hub.get_dir()) / "checkpoints" / "rivershavewings",
             expected_sha256="02e212cbec7c9012eb12cd63fef6fa97640b4e8fcd6c6e1f410a52eea1925fe1",
         )
-    model = load_diffusion_model(checkpoint, device=device)
+    model = load_diffusion_model(checkpoint, device=device, model_type=args.model_type)
     sigma_min, sigma_max = model.sigmas[0].item(), model.sigmas[-1].item()
     size_fac = (args.size[0] * args.size[1]) / (512 * 512)
 
