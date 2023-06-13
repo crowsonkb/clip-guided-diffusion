@@ -445,7 +445,7 @@ def main():
         ns = K.sampling.BrownianTreeNoiseSampler(x, sigma_min, sigma_max)
 
         # Sample
-        print("Sampling...")
+        print("Sampling.")
         try:
             samples = sample_dpm_guided(
                 model=cond_model,
