@@ -379,7 +379,7 @@ def main():
     torch.set_float32_matmul_precision("high")
 
     # Load diffusion model
-    print("Loading diffusion model...")
+    print("Loading diffusion model.")
     checkpoint = args.checkpoint
     if checkpoint is None:
         checkpoint = download_file(
@@ -392,7 +392,7 @@ def main():
     size_fac = (args.size[0] * args.size[1]) / (512 * 512)
 
     # Load CLIP and encode prompt
-    print("Loading CLIP...")
+    print("Loading CLIP.")
     clip_wrap = CLIPWrapper.from_pretrained(
         args.clip_model, device=device, cutn=args.cutn
     )
