@@ -77,6 +77,10 @@ The higher order solvers are [linear multistep methods](https://en.wikipedia.org
 
 - `--seed`: the random seed (default: 0)
 
+## Alternate models
+
+You can also use [Emily S](https://twitter.com/nshepperd1)'s OpenImages fine-tune of the 512x512 ImageNet diffusion model, which is available at https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_openimages_epoch28_withfilter.safetensors. It is a v objective model so you will need to specify `--model-type v`.
+
 ## To do
 
 - Multiple prompts
