@@ -215,7 +215,8 @@ def sample_dpm_guided(
         # This returns the h that should be used for the given cond_scale norm to keep
         # the norm of its contribution to a step below max_cond at a given t.
         sigma = t_to_sigma(t)
-        return (cond_eps_norm / (cond_eps_norm - max_cond / sigma)).log() / (eta + 1)
+        h = (cond_eps_norm / (cond_eps_norm - max_cond / sigma)).log() / (eta + 1)
+        return h.nan_to_num(nan=float("inf"))
 
     # Set up constants
     sigma_min = torch.tensor(sigma_min, device=x.device)
@@ -238,8 +239,7 @@ def sample_dpm_guided(
 
         # Scale step size down if cond_score is too large
         cond_eps_norm = cond_score.mul(sigma).pow(2).mean().sqrt() + 1e-8
-        h = h_for_max_cond(t, eta, cond_eps_norm, max_cond)
-        h = h.nan_to_num(nan=float("inf")).clamp(max=max_h)
+        h = h_for_max_cond(t, eta, cond_eps_norm, max_cond).clamp(max=max_h)
         t_next = torch.minimum(t + h, t_end)
         h = t_next - t
         sigma_next = t_to_sigma(t_next)
