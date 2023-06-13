@@ -411,7 +411,7 @@ def main():
             return loss
 
         grad = torch.autograd.functional.vjp(loss_fn, x)[1]
-        return denoised, -grad
+        return denoised.clamp(-1, 1), -grad
 
     if args.compile:
         cond_model = torch.compile(cond_model)
