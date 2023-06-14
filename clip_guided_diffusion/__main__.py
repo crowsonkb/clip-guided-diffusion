@@ -140,11 +140,29 @@ def batch_crop(x, out_size, corners, mode="bilinear", padding_mode="zeros"):
     return F.grid_sample(x, grid, mode, padding_mode, align_corners=False)
 
 
+def stratified_sample(strata_begin, strata_end, shuffle=True):
+    assert strata_begin.shape == strata_end.shape
+    assert strata_begin.ndim == 1
+    assert strata_begin.device == strata_end.device
+    assert strata_begin.dtype == strata_end.dtype
+
+    n_strata = strata_begin.shape[0]
+    device = strata_begin.device
+    dtype = strata_begin.dtype
+
+    u = torch.rand([n_strata], dtype=dtype, device=device)
+    samples = u * (strata_end - strata_begin) + strata_begin
+    if shuffle:
+        samples = samples[torch.randperm(n_strata, device=device)]
+
+    return samples
+
+
 class CLIPWrapper(nn.Module):
-    def __init__(self, model, preprocess, cutn=32):
+    def __init__(self, model, preprocess_tf, cutn=32):
         super().__init__()
         self.model = model
-        self.preprocess = preprocess
+        self.preprocess_tf = preprocess_tf
         self.cutn = cutn
 
     @property
@@ -154,11 +172,14 @@ class CLIPWrapper(nn.Module):
     @classmethod
     def from_pretrained(cls, clip_name, device="cpu", **kwargs):
         model = clip.load(clip_name)[0].eval().requires_grad_(False).to(device)
-        preprocess = transforms.Normalize(
+        preprocess_tf = transforms.Normalize(
             mean=[0.48145466, 0.4578275, 0.40821073],
             std=[0.26862954, 0.26130258, 0.27577711],
         )
-        return cls(model, preprocess, **kwargs)
+        return cls(model, preprocess_tf, **kwargs)
+
+    def preprocess(self, x):
+        return self.preprocess_tf((x + 1) / 2)
 
     def encode_text(self, s):
         toks = clip.tokenize(s, truncate=True).to(self.model.logit_scale.device)
@@ -166,14 +187,23 @@ class CLIPWrapper(nn.Module):
 
     def forward(self, x):
         n, c, h, w = x.shape
-        max_size = min(w, h)
-        size = torch.empty([self.cutn], device=x.device)
-        size = nn.init.trunc_normal_(size, 0.8, 0.3, 0.5, 0.95) * max_size
+        min_size = x.new_tensor(min(self.cut_size))
+        max_size = x.new_tensor(min(w, h))
+
+        # Stratified sampling of crop sizes
+        dist = torch.distributions.Normal(0.8 * max_size, 0.3 * max_size)
+        strata = torch.linspace(
+            dist.cdf(min_size), dist.cdf(max_size), self.cutn + 1, device=x.device
+        )
+        size = dist.icdf(stratified_sample(strata[:-1], strata[1:]))
+
+        # Uniform sampling of crop offsets
         offsetx = torch.rand([self.cutn], device=x.device) * (w - size)
         offsety = torch.rand([self.cutn], device=x.device) * (h - size)
         offsets = torch.stack([offsety, offsetx], dim=-1)
         corners = torch.stack([offsets, offsets + size[:, None]], dim=-1)
-        x = self.preprocess((x + 1) / 2)
+
+        x = self.preprocess(x)
         cutouts = batch_crop(x, self.cut_size, corners)
         return self.model.encode_image(cutouts).to(x.dtype)
 
@@ -208,8 +238,8 @@ def sample_dpm_guided(
     def t_to_sigma(t):
         return torch.exp(-t)
 
-    def phi_1(x):
-        return torch.expm1(-x)
+    def phi_1(h):
+        return torch.expm1(-h)
 
     def h_for_max_cond(t, eta, cond_eps_norm, max_cond):
         # This returns the h that should be used for the given cond_scale norm to keep
@@ -239,26 +269,27 @@ def sample_dpm_guided(
 
         # Scale step size down if cond_score is too large
         cond_eps_norm = cond_score.mul(sigma).pow(2).mean().sqrt() + 1e-8
-        h = h_for_max_cond(t, eta, cond_eps_norm, max_cond).clamp(max=max_h)
+        h = h_for_max_cond(t, eta, cond_eps_norm, max_cond)
+        h = max_h * torch.tanh(h / max_h)
         t_next = torch.minimum(t + h, t_end)
         h = t_next - t
         sigma_next = t_to_sigma(t_next)
 
         # Callback
         if callback is not None:
-            callback(
-                {
-                    "x": x,
-                    "i": i,
-                    "sigma": sigma,
-                    "sigma_next": sigma_next,
-                    "denoised": denoised,
-                }
-            )
+            obj = {
+                "x": x,
+                "i": i,
+                "sigma": sigma,
+                "sigma_next": sigma_next,
+                "denoised": denoised,
+            }
+            callback(obj)
 
         # First order step (guided)
+        h_eta = h + eta * h
         x = (sigma_next / sigma) * torch.exp(-h * eta) * x
-        x = x - phi_1(h + eta * h) * (denoised + sigma**2 * cond_score)
+        x = x - phi_1(h_eta) * (denoised + sigma**2 * cond_score)
         noise = noise_sampler(sigma, sigma_next)
         x = x + noise * sigma_next * phi_1(2 * eta * h * s_noise).neg().sqrt()
 
@@ -270,18 +301,18 @@ def sample_dpm_guided(
             d1_1 = (denoised_1 - denoised_2) / r1
             d1 = d1_0 + (r0 / (r0 + r1)) * (d1_0 - d1_1)
             d2 = (1 / (r0 + r1)) * (d1_0 - d1_1)
-            phi_2 = phi_1(h + eta * h) / (h + eta * h) + 1
-            phi_3 = phi_2 / (h + eta * h) - 0.5
+            phi_2 = phi_1(h_eta) / h_eta + 1
+            phi_3 = phi_2 / h_eta - 0.5
             x = x + phi_2 * d1 - phi_3 * d2
         elif solver_type in {"heun", "dpm3"} and denoised_1 is not None:
             r = h_1 / h
             d = (denoised - denoised_1) / r
-            phi_2 = phi_1(h + eta * h) / (h + eta * h) + 1
+            phi_2 = phi_1(h_eta) / h_eta + 1
             x = x + phi_2 * d
         elif solver_type == "midpoint" and denoised_1 is not None:
             r = h_1 / h
             d = (denoised - denoised_1) / r
-            x = x - 0.5 * phi_1(h + eta * h) * d
+            x = x - 0.5 * phi_1(h_eta) * d
 
         # Update state
         denoised_1, denoised_2 = denoised, denoised_1
@@ -407,11 +438,10 @@ def main():
             denoised = model(x, sigma, **kwargs)
             image_embeds = clip_wrap(denoised)
             clip_score = torch.cosine_similarity(image_embeds, target, dim=-1).mean()
-            loss = -clip_score * args.clip_scale * size_fac
-            return loss
+            return clip_score * args.clip_scale * size_fac
 
         grad = torch.autograd.functional.vjp(loss_fn, x)[1]
-        return denoised.clamp(-1, 1), -grad
+        return denoised.clamp(-1, 1), grad
 
     if args.compile:
         cond_model = torch.compile(cond_model)
