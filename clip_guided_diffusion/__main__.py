@@ -2,6 +2,8 @@
 
 import argparse
 from concurrent import futures
+from functools import partial
+import json
 import hashlib
 import math
 from pathlib import Path
@@ -9,6 +11,7 @@ from pathlib import Path
 import clip
 from guided_diffusion import script_util
 import k_diffusion as K
+from PIL import ExifTags
 import requests
 from rich import print
 from rich.align import Align
@@ -21,6 +24,7 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 
 print = tqdm.external_write_mode()(print)
+srgb_profile = (Path(__file__).resolve().parent / "sRGB Profile.icc").read_bytes()
 
 
 def download_file(url, root, expected_sha256):
@@ -54,10 +58,27 @@ def download_file(url, root, expected_sha256):
     return target
 
 
-def save_image(image, path):
+class JsonEncoderForMakerNote(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, argparse.Namespace):
+            return vars(obj)
+        elif isinstance(obj, Path):
+            return str(obj)
+        return obj
+
+
+def save_image(image, path, prompt=None, args=None):
     if isinstance(image, torch.Tensor):
         image = K.utils.to_pil_image(image)
-    image.save(path)
+    exif = image.getexif()
+    exif[ExifTags.Base.Software] = "CLIP Guided Diffusion"
+    if prompt is not None:
+        exif[ExifTags.Base.ImageDescription] = prompt
+    obj = {}
+    if args is not None:
+        obj["args"] = args
+    exif[ExifTags.Base.MakerNote] = json.dumps(obj, cls=JsonEncoderForMakerNote)
+    image.save(path, exif=exif, icc_profile=srgb_profile)
 
 
 class OpenAIVDenoiser(K.external.DiscreteVDDPMDenoiser):
@@ -446,6 +467,8 @@ def main():
     if args.compile:
         cond_model = torch.compile(cond_model)
 
+    save_fn = partial(save_image, prompt=args.prompt, args=args)
+
     # Set up callback
     class Callback:
         def __enter__(self):
@@ -466,7 +489,7 @@ def main():
             print(f"step {i}, sigma: {sigma:g}, h: {h:g}")
             if args.save_all:
                 path = args.output.with_stem(args.output.stem + f"_{i:05}")
-                self.ex.submit(save_image, info["denoised"][0], path)
+                self.ex.submit(save_fn, info["denoised"][0], path)
 
     with Callback() as cb:
         # Draw random noise
@@ -492,7 +515,7 @@ def main():
 
             # Save the image
             print(f"Saving to {args.output}...")
-            save_image(samples[0], args.output)
+            save_fn(samples[0], args.output)
         except KeyboardInterrupt:
             print("Interrupted")
 
