@@ -21,6 +21,10 @@ Try:
 clip_guided_diffusion "A beautiful fantasy painting of the wind by Wojciech Siudmak" --seed 15554
 ```
 
+### Info tool
+
+CLIP Guided Diffusion saves the prompt and CLI arguments used to generate an image in the image EXIF metadata. You can view this metadata with the `clip_guided_diffusion_info` tool.
+
 ### CLI arguments
 
 - `--checkpoint`: the diffusion model checkpoint to load (default: None)
