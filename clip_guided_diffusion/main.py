@@ -11,7 +11,7 @@ from pathlib import Path
 import clip
 from guided_diffusion import script_util
 import k_diffusion as K
-from PIL import ExifTags
+from PIL import ExifTags, Image
 import requests
 from rich import print
 from rich.align import Align
@@ -382,6 +382,13 @@ def main():
         default=1.0,
         help="the multiplier for the noise variance. 0 gives ODE sampling, 1 gives standard diffusion SDE sampling.",
     )
+    p.add_argument("--init", type=Path, help="the initial image")
+    p.add_argument(
+        "--init-sigma",
+        type=float,
+        default=10.0,
+        help="the starting noise level when using an init image",
+    )
     p.add_argument(
         "--max-cond",
         type=float,
@@ -407,6 +414,7 @@ def main():
     p.add_argument(
         "--save-all", action="store_true", help="save all intermediate denoised images"
     )
+    p.add_argument("--seed", type=int, default=0, help="the random seed")
     p.add_argument(
         "--size", type=int, nargs=2, default=(512, 512), help="the output size"
     )
@@ -417,7 +425,6 @@ def main():
         default="dpm3",
         help="the SDE solver type",
     )
-    p.add_argument("--seed", type=int, default=0, help="the random seed")
     args = p.parse_args()
 
     print(Panel(Align("CLIP Guided Diffusion", "center")))
@@ -491,12 +498,22 @@ def main():
                 path = args.output.with_stem(args.output.stem + f"_{i:05}")
                 self.ex.submit(save_fn, info["denoised"][0], path)
 
-    with Callback() as cb:
-        # Draw random noise
-        torch.manual_seed(args.seed)
-        x = torch.randn([1, 3, args.size[1], args.size[0]], device=device) * sigma_max
-        ns = K.sampling.BrownianTreeNoiseSampler(x, sigma_min, sigma_max)
+    # Load init image
+    if args.init is None:
+        init_sigma = sigma_max
+        x = torch.zeros([1, 3, args.size[1], args.size[0]], device=device)
+    else:
+        print("Loading init image.")
+        init_sigma = min(max(args.init_sigma, sigma_min), sigma_max)
+        init = Image.open(args.init).convert("RGB").resize(args.size, Image.BICUBIC)
+        x = transforms.functional.to_tensor(init).to(device)[None] * 2 - 1
 
+    # Draw random noise
+    torch.manual_seed(args.seed)
+    x = x + torch.randn_like(x) * init_sigma
+    ns = K.sampling.BrownianTreeNoiseSampler(x, sigma_min, sigma_max)
+
+    with Callback() as cb:
         # Sample
         print("Sampling.")
         try:
@@ -504,7 +521,7 @@ def main():
                 model=cond_model,
                 x=x,
                 sigma_min=sigma_min,
-                sigma_max=sigma_max,
+                sigma_max=init_sigma,
                 max_h=args.max_h,
                 max_cond=args.max_cond,
                 eta=args.eta,

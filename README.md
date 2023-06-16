@@ -51,6 +51,10 @@ It will autodetect CUDA or CPU if not specified.
 
 `eta` higher than 1 is supported and produces a "soft" effect when raised to 1.5 or 2.
 
+- `--init`: the initial image (default: None)
+
+- `--init-sigma`: the starting noise level when using an init image (default: 10.0)
+
 - `--max-cond`: the maximum amount that guidance is allowed to perturb a step (default: 0.05)
 
 This is one of the two main options that controls the number of steps, and thus image quality. If the classifier guidance norm is larger than this on a step, the step size (h) will be adjusted downward from the maximum step size. Since classifier guidance perturbs steps more at the high noise levels, this option mainly applies "braking" to increase quality at the start of the noise schedule. Setting it lower increases quality, setting it higher decreases quality.
@@ -67,6 +71,8 @@ The total amount of time simulated for the OpenAI diffusion models is 9.66387, s
 
 - `--save-all`: save all intermediate denoised images (default: False)
 
+- `--seed`: the random seed (default: 0)
+
 - `--size`: the output size (default: (512, 512))
 
 Image size is specified as (width, height).
@@ -79,8 +85,6 @@ The supported SDE solver types are `euler`, `midpoint`, `heun`, and `dpm3`.
 
 The higher order solvers are [linear multistep methods](https://en.wikipedia.org/wiki/Linear_multistep_method): they reuse the model outputs of previous steps, one in the case of `midpoint` and `heun` and two in the case of `dpm3`. The higher order solvers are also splitting methods: they do not classifier guide the higher order correction, only the base first order step.
 
-- `--seed`: the random seed (default: 0)
-
 ## Alternate models
 
 You can also use [Emily S](https://twitter.com/nshepperd1)'s OpenImages fine-tune of the 512x512 ImageNet diffusion model, which is available at https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_openimages_epoch28_withfilter.safetensors. It is a v objective model so you will need to specify `--model-type v`.
@@ -91,7 +95,7 @@ You can also use [Emily S](https://twitter.com/nshepperd1)'s OpenImages fine-tun
 
 - Image prompts
 
-- Init images (and LPIPS loss)
+- LPIPS loss for init images
 
 - Support the 256x256 ImageNet diffusion model
 
