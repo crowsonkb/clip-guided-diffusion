@@ -320,8 +320,8 @@ def sample_dpm_guided(
             r1 = h_2 / h
             d1_0 = (denoised - denoised_1) / r0
             d1_1 = (denoised_1 - denoised_2) / r1
-            d1 = d1_0 + (r0 / (r0 + r1)) * (d1_0 - d1_1)
-            d2 = (1 / (r0 + r1)) * (d1_0 - d1_1)
+            d1 = d1_0 + (d1_0 - d1_1) * r0 / (r0 + r1)
+            d2 = (d1_0 - d1_1) / (r0 + r1)
             phi_2 = phi_1(h_eta) / h_eta + 1
             phi_3 = phi_2 / h_eta - 0.5
             x = x + phi_2 * d1 - phi_3 * d2
