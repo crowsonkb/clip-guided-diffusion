@@ -274,10 +274,10 @@ def sample_dpm_guided(
     sigma_max = torch.tensor(sigma_max, device=x.device)
     max_h = torch.tensor(max_h, device=x.device)
     s_in = x.new_ones([x.shape[0]])
-    t = sigma_to_t(sigma_max)
     t_end = sigma_to_t(sigma_min)
 
     # Set up state
+    t = sigma_to_t(sigma_max)
     denoised_1, denoised_2 = None, None
     h_1, h_2 = None, None
     i = 0
