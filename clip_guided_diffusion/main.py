@@ -357,7 +357,8 @@ def main():
     p.add_argument(
         "--clip-model",
         type=str,
-        default="ViT-B/16",
+        nargs="+",
+        default=["ViT-B/16"],
         choices=clip.available_models(),
         help="the CLIP model to use",
     )
@@ -365,14 +366,16 @@ def main():
         "--clip-scale",
         "-cs",
         type=float,
-        default=2500.0,
+        nargs="+",
+        default=[2500.0],
         help="the CLIP guidance scale",
     )
     p.add_argument("--compile", action="store_true", help="torch.compile() the model")
     p.add_argument(
         "--cutn",
         type=int,
-        default=32,
+        nargs="+",
+        default=[32],
         help="the number of random crops to use per step",
     )
     p.add_argument("--device", type=str, default=None, help="the device to use")
@@ -427,6 +430,11 @@ def main():
     )
     args = p.parse_args()
 
+    if not len(args.clip_model) == len(args.clip_scale) == len(args.cutn):
+        raise ValueError(
+            "--clip-model, --clip-scale, and --cutn must have the same number of arguments"
+        )
+
     print(Panel(Align("CLIP Guided Diffusion", "center")))
 
     if args.device is None:
@@ -452,10 +460,11 @@ def main():
 
     # Load CLIP and encode prompt
     print("Loading CLIP.")
-    clip_wrap = CLIPWrapper.from_pretrained(
-        args.clip_model, device=device, cutn=args.cutn
-    )
-    target = clip_wrap.encode_text(args.prompt)
+    clip_wraps = [
+        CLIPWrapper.from_pretrained(name, device=device, cutn=cutn)
+        for name, cutn in zip(args.clip_model, args.cutn)
+    ]
+    targets = [wrap.encode_text(args.prompt) for wrap in clip_wraps]
 
     # Wrap the model in a function that also computes and returns the cond_score
     def cond_model(x, sigma, **kwargs):
@@ -464,9 +473,12 @@ def main():
         def loss_fn(x):
             nonlocal denoised
             denoised = model(x, sigma, **kwargs)
-            image_embeds = clip_wrap(denoised)
-            clip_score = torch.cosine_similarity(image_embeds, target, dim=-1).mean()
-            return clip_score * args.clip_scale * size_fac
+            loss = x.new_tensor(0.0)
+            for wrap, target, scale in zip(clip_wraps, targets, args.clip_scale):
+                image_embeds = wrap(denoised)
+                clip_scores = torch.cosine_similarity(image_embeds, target, dim=-1)
+                loss += clip_scores.mean() * scale * size_fac
+            return loss
 
         grad = torch.autograd.functional.vjp(loss_fn, x)[1]
         return denoised.clamp(-1, 1), grad

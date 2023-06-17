@@ -31,9 +31,9 @@ CLIP Guided Diffusion saves the prompt and CLI arguments used to generate an ima
 
 The diffusion model this repo uses if none is specified is https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_finetune_008100.safetensors, which is the 512x512 OpenAI ImageNet diffusion model fine-tuned for 8100 steps to remove the class conditioning. Its SHA-256 hash is `02e212cbec7c9012eb12cd63fef6fa97640b4e8fcd6c6e1f410a52eea1925fe1`. It will auto-download it on first run.
 
-- `--clip-model`: the CLIP model to use (default: ViT-B/16)
+- `--clip-model`: the CLIP model(s) to use (default: ViT-B/16)
 
-- `--clip-scale`: the CLIP guidance scale (default: 2500.0)
+- `--clip-scale`: the CLIP guidance scale(s) (default: 2500.0)
 
 The CLIP guidance scale is automatically adjusted based on the image size, if you are generating a 1024x768 image it will be multiplied by (1024 * 768) / (512 * 512), or 3.
 
@@ -41,7 +41,7 @@ Raising the CLIP guidance scale will cause the solver to automatically decrease 
 
 - `--compile`: torch.compile() the model (default: False)
 
-- `--cutn`: the number of random crops to use per step (default: 32)
+- `--cutn`: the number of random crops (per CLIP model) to use per step (default: 32)
 
 - `--device`: the device to use (default: None)
 
@@ -98,7 +98,5 @@ You can also use [Emily S](https://twitter.com/nshepperd1)'s OpenImages fine-tun
 - LPIPS loss for init images
 
 - Support the 256x256 ImageNet diffusion model
-
-- CLIP model ensembling
 
 - OpenCLIP support
