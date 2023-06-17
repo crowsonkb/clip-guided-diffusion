@@ -179,6 +179,12 @@ def stratified_sample(strata_begin, strata_end, shuffle=True):
     return samples
 
 
+def mean_pad(x, pad):
+    x_zero_pad = F.pad(x, pad, "constant")
+    mask = F.pad(torch.zeros_like(x), pad, "constant", 1.0)
+    return x_zero_pad + mask * x.mean(dim=[2, 3], keepdim=True)
+
+
 class CLIPWrapper(nn.Module):
     def __init__(self, model, preprocess_tf, cutn=32):
         super().__init__()
@@ -208,19 +214,25 @@ class CLIPWrapper(nn.Module):
 
     def forward(self, x):
         n, c, h, w = x.shape
-        min_size = x.new_tensor(min(self.cut_size))
-        max_size = x.new_tensor(min(w, h))
+        min_size = min(self.cut_size)
+        max_size = min(w, h)
+        pad_size = max(w, h)
+        pad_w, pad_h = (pad_size - w) // 2, (pad_size - h) // 2
+        x = mean_pad(x, (pad_w, pad_w, pad_h, pad_h))
 
         # Stratified sampling of crop sizes
         dist = torch.distributions.Normal(0.8 * max_size, 0.3 * max_size)
         strata = torch.linspace(
-            dist.cdf(min_size), dist.cdf(max_size), self.cutn + 1, device=x.device
+            dist.cdf(x.new_tensor(min_size)),
+            dist.cdf(x.new_tensor(pad_size)),
+            self.cutn + 1,
+            device=x.device,
         )
         size = dist.icdf(stratified_sample(strata[:-1], strata[1:]))
 
         # Uniform sampling of crop offsets
-        offsetx = torch.rand([self.cutn], device=x.device) * (w - size)
-        offsety = torch.rand([self.cutn], device=x.device) * (h - size)
+        offsetx = torch.rand([self.cutn], device=x.device) * (pad_size - size)
+        offsety = torch.rand([self.cutn], device=x.device) * (pad_size - size)
         offsets = torch.stack([offsety, offsetx], dim=-1)
         corners = torch.stack([offsets, offsets + size[:, None]], dim=-1)
 
