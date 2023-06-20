@@ -60,6 +60,8 @@ def main():
         sys.exit(1)
 
     print("Prompt:", prompt)
+    if "steps" in maker_note:
+        print("Steps:", maker_note["steps"])
     print("Command:", command_for_saved_args(maker_note["args"]))
 
 

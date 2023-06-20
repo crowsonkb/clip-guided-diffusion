@@ -67,7 +67,7 @@ class JsonEncoderForMakerNote(json.JSONEncoder):
         return obj
 
 
-def save_image(image, path, prompt=None, args=None):
+def save_image(image, path, prompt=None, args=None, steps=None):
     if isinstance(image, torch.Tensor):
         image = K.utils.to_pil_image(image)
     exif = image.getexif()
@@ -77,6 +77,8 @@ def save_image(image, path, prompt=None, args=None):
     obj = {}
     if args is not None:
         obj["args"] = args
+    if steps is not None:
+        obj["steps"] = steps
     exif[ExifTags.Base.MakerNote] = json.dumps(obj, cls=JsonEncoderForMakerNote)
     image.save(path, exif=exif, icc_profile=srgb_profile)
 
@@ -505,6 +507,7 @@ def main():
         def __enter__(self):
             self.ex = futures.ThreadPoolExecutor()
             self.pbar = tqdm()
+            self.steps = 0
             return self
 
         def __exit__(self, exc_type, exc_value, traceback):
@@ -513,6 +516,7 @@ def main():
 
         def __call__(self, info):
             self.pbar.update(1)
+            self.steps += 1
             i = info["i"]
             sigma = info["sigma"].item()
             sigma_next = info["sigma_next"].item()
@@ -520,7 +524,7 @@ def main():
             print(f"step {i}, sigma: {sigma:g}, h: {h:g}")
             if args.save_all:
                 path = args.output.with_stem(args.output.stem + f"_{i:05}")
-                self.ex.submit(save_fn, info["denoised"][0], path)
+                self.ex.submit(save_fn, info["denoised"][0], path, steps=self.steps)
 
     # Load init image
     if args.init is None:
@@ -556,7 +560,7 @@ def main():
 
             # Save the image
             print(f"Saving to {args.output}...")
-            save_fn(samples[0], args.output)
+            save_fn(samples[0], args.output, steps=cb.steps)
         except KeyboardInterrupt:
             print("Interrupted")
 
