@@ -4,6 +4,16 @@ A WIP updated version of my [2021 CLIP Guided Diffusion text to image method](ht
 
 This new codebase uses a [k-diffusion](https://github.com/crowsonkb/k-diffusion) wrapper around [OpenAI's ImageNet diffusion models](https://github.com/crowsonkb/guided-diffusion) and uses a specialized solver, a splitting method adaptive step size version of [DPM-Solver++ SDE](https://github.com/LuChengTHU/dpm-solver).
 
+## Example outputs
+
+<img src="https://raw.githubusercontent.com/crowsonkb/clip-guided-diffusion/master/assets/example_1.png" width=640 height=512></img>
+
+*Prompt: chrysanthemum supernova, trending on ArtStation*
+
+<img src="https://raw.githubusercontent.com/crowsonkb/clip-guided-diffusion/master/assets/example_2.png" width=640 height=512></img>
+
+*Prompt: A landscape resembling the Death tarot card by Gerardo Dottori*
+
 ## Installation
 
 ```
