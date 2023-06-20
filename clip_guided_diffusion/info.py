@@ -22,6 +22,8 @@ def command_for_saved_args(args):
                 continue
             if k == "model_type" and v == "eps":
                 continue
+            if k == "init_sigma" and args["init"] is None:
+                continue
             ss.append("--" + k.translate(str.maketrans("_", "-")))
             if isinstance(v, list):
                 ss.extend(map(str, v))
