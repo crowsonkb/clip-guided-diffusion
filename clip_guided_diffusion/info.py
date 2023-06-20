@@ -48,7 +48,16 @@ def main():
         sys.exit(1)
 
     prompt = exif.get(ExifTags.Base.ImageDescription, "")
-    maker_note = json.loads(exif.get(ExifTags.Base.MakerNote, "{}"))
+    maker_note_str = exif.get(ExifTags.Base.MakerNote)
+    if maker_note_str is None:
+        print(f"Image {args.image} is missing the MakerNote EXIF tag.")
+        sys.exit(1)
+    try:
+        maker_note = json.loads(maker_note_str)
+        maker_note["args"]
+    except (KeyError, json.JSONDecodeError):
+        print(f"Image {args.image} has a corrupt MakerNote EXIF tag.")
+        sys.exit(1)
 
     print("Prompt:", prompt)
     print("Command:", command_for_saved_args(maker_note["args"]))
