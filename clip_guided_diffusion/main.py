@@ -187,11 +187,24 @@ def mean_pad(x, pad):
     return x_zero_pad + mask * x.mean(dim=[2, 3], keepdim=True)
 
 
+class Normalize(nn.Module):
+    def __init__(self, mean, std):
+        super().__init__()
+        self.register_buffer("mean", torch.as_tensor(mean).view(1, -1, 1, 1))
+        self.register_buffer("std", torch.as_tensor(std).view(1, -1, 1, 1))
+
+    def forward(self, x):
+        return (x - self.mean) / self.std
+
+    def inverse(self, x):
+        return x * self.std + self.mean
+
+
 class CLIPWrapper(nn.Module):
-    def __init__(self, model, preprocess_tf, cutn=32):
+    def __init__(self, model, preprocess, cutn=32):
         super().__init__()
         self.model = model
-        self.preprocess_tf = preprocess_tf
+        self.preprocess = preprocess
         self.cutn = cutn
 
     @property
@@ -200,15 +213,11 @@ class CLIPWrapper(nn.Module):
 
     @classmethod
     def from_pretrained(cls, clip_name, device="cpu", **kwargs):
-        model = clip.load(clip_name)[0].eval().requires_grad_(False).to(device)
-        preprocess_tf = transforms.Normalize(
-            mean=[0.48145466, 0.4578275, 0.40821073],
-            std=[0.26862954, 0.26130258, 0.27577711],
-        )
-        return cls(model, preprocess_tf, **kwargs)
-
-    def preprocess(self, x):
-        return self.preprocess_tf((x + 1) / 2)
+        model = clip.load(clip_name, device=device)[0].eval().requires_grad_(False)
+        mean = torch.tensor([0.48145466, 0.4578275, 0.40821073])
+        std = torch.tensor([0.26862954, 0.26130258, 0.27577711])
+        preprocess = Normalize(mean * 2 - 1, std * 2).to(device)
+        return cls(model, preprocess, **kwargs)
 
     def encode_text(self, s):
         toks = clip.tokenize(s, truncate=True).to(self.model.logit_scale.device)
