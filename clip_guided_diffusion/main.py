@@ -168,6 +168,8 @@ class SphericalAverageError(Exception):
 
 
 def spherical_average(p, w=None, tol=1e-4):
+    if p.dtype in {torch.float16, torch.bfloat16}:
+        p = p.float()
     if w is None:
         w = p.new_ones(p.shape[:-1])
     if p.shape[:-1] != w.shape:
