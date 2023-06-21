@@ -170,7 +170,9 @@ class SphericalAverageError(Exception):
 def spherical_average(p, w=None, tol=1e-4):
     if w is None:
         w = p.new_ones(p.shape[:-1])
-    assert p.shape[:-1] == w.shape
+    if p.shape[:-1] != w.shape:
+        s1, s2, s3 = tuple(p.shape[:-1]), tuple(p.shape), tuple(w.shape)
+        raise ValueError(f"expected w shape {s1} for p shape {s2}, got {s3}")
     w = w / w.sum(dim=-1, keepdim=True)
     w = w.unsqueeze(-1)
     p = projx(p)
@@ -183,8 +185,8 @@ def spherical_average(p, w=None, tol=1e-4):
         norm = rgrad.detach().norm(dim=-1).max()
         if not norm.isfinite():
             raise SphericalAverageError("grad norm is not finite")
-        if norm > norm_prev:
-            raise SphericalAverageError("grad norm increased")
+        if norm >= norm_prev:
+            raise SphericalAverageError("grad norm did not decrease")
         if norm <= tol:
             break
         norm_prev = norm
