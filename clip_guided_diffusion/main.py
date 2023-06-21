@@ -139,6 +139,58 @@ def load_diffusion_model(model_path, device="cpu", model_type="eps"):
         raise ValueError(f"Unknown model type {model_type}")
 
 
+def projx(x):
+    return x / x.norm(dim=-1, keepdim=True)
+
+
+def proju(x, u):
+    return u - torch.sum(x * u, dim=-1, keepdim=True) * x
+
+
+def dist(u, v, keepdim=False):
+    norm = torch.linalg.norm(u - v, dim=-1, keepdim=keepdim)
+    return 2 * torch.arcsin(norm / 2)
+
+
+def retr(x, u):
+    return projx(x + u)
+
+
+def logmap(x, y):
+    u = proju(x, y - x)
+    d = dist(x, y, keepdim=True)
+    result = u * d / u.norm(dim=-1, keepdim=True)
+    return torch.where(d > 1e-4, result, u)
+
+
+class SphericalAverageError(Exception):
+    pass
+
+
+def spherical_average(p, w=None, tol=1e-4):
+    if w is None:
+        w = p.new_ones(p.shape[:-1])
+    assert p.shape[:-1] == w.shape
+    w = w / w.sum(dim=-1, keepdim=True)
+    w = w.unsqueeze(-1)
+    p = projx(p)
+    q = projx(torch.sum(p * w, dim=-2))
+    norm_prev = p.new_tensor(float("inf"))
+    while True:
+        p_star = logmap(q.unsqueeze(-2), p)
+        rgrad = torch.sum(p_star * w, dim=-2)
+        q = retr(q, rgrad)
+        norm = rgrad.detach().norm(dim=-1).max()
+        if not norm.isfinite():
+            raise SphericalAverageError("grad norm is not finite")
+        if norm > norm_prev:
+            raise SphericalAverageError("grad norm increased")
+        if norm <= tol:
+            break
+        norm_prev = norm
+    return q
+
+
 def batch_crop(x, out_size, corners, mode="bilinear", padding_mode="zeros"):
     # batch crops out of a single image and resize them all to out_size
     # x, the input image, is NCHW but N must be 1
@@ -249,7 +301,8 @@ class CLIPWrapper(nn.Module):
 
         x = self.preprocess(x)
         cutouts = batch_crop(x, self.cut_size, corners)
-        return self.model.encode_image(cutouts).to(x.dtype)
+        image_embeds = self.model.encode_image(cutouts).to(x.dtype)
+        return spherical_average(image_embeds)
 
 
 @torch.no_grad()
@@ -481,13 +534,24 @@ def main():
     sigma_min, sigma_max = model.sigmas[0].item(), model.sigmas[-1].item()
     size_fac = (args.size[0] * args.size[1]) / (512 * 512)
 
-    # Load CLIP and encode prompt
+    # Load CLIP
     print("Loading CLIP.")
     clip_wraps = [
         CLIPWrapper.from_pretrained(name, device=device, cutn=cutn)
         for name, cutn in zip(args.clip_model, args.cutn)
     ]
-    targets = [wrap.encode_text(args.prompt) for wrap in clip_wraps]
+
+    # Parse and encode prompts
+    prompts, weights, targets = [], [], []
+    for prompt_and_weight in args.prompt.split("|"):
+        a, b, c = prompt_and_weight.rpartition(":")
+        if not b:
+            a, c = c, "1"
+        prompts.append(a.strip())
+        weights.append(float(c.strip()))
+    weights = torch.tensor(weights, device=device)
+    for wrap in clip_wraps:
+        targets.append(spherical_average(wrap.encode_text(prompts), weights))
 
     # Wrap the model in a function that also computes and returns the cond_score
     def cond_model(x, sigma, **kwargs):
@@ -498,9 +562,9 @@ def main():
             denoised = model(x, sigma, **kwargs)
             loss = x.new_tensor(0.0)
             for wrap, target, scale in zip(clip_wraps, targets, args.clip_scale):
-                image_embeds = wrap(denoised)
-                clip_scores = torch.cosine_similarity(image_embeds, target, dim=-1)
-                loss += clip_scores.mean() * scale * size_fac
+                image_embed = wrap(denoised)
+                clip_score = torch.cosine_similarity(image_embed, target, dim=-1)
+                loss += clip_score * scale * size_fac
             return loss
 
         grad = torch.autograd.functional.vjp(loss_fn, x)[1]

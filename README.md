@@ -31,6 +31,14 @@ Try:
 clip_guided_diffusion "A beautiful fantasy painting of the wind by Wojciech Siudmak" --seed 15554
 ```
 
+### Multiple prompts
+
+Multiple prompts can be specified by separating them with `|`, and relative weights per prompt can be specified by appending `:` and the weight to the prompt. For example:
+
+```
+clip_guided_diffusion "First prompt:1|Second prompt:2"
+```
+
 ### Info tool
 
 CLIP Guided Diffusion saves the prompt and CLI arguments used to generate an image in the image EXIF metadata. You can view this metadata with the `clip_guided_diffusion_info` tool.
@@ -100,8 +108,6 @@ The higher order solvers are [linear multistep methods](https://en.wikipedia.org
 You can also use [Emily S](https://twitter.com/nshepperd1)'s OpenImages fine-tune of the 512x512 ImageNet diffusion model, which is available at https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_openimages_epoch28_withfilter.safetensors. It is a v objective model so you will need to specify `--model-type v`.
 
 ## To do
-
-- Multiple prompts
 
 - Image prompts
 
