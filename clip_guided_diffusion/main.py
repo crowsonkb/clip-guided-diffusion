@@ -20,7 +20,7 @@ import safetensors.torch
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torchvision import transforms
+from torchvision.transforms import functional as TF
 from tqdm.auto import tqdm
 
 print = tqdm.external_write_mode()(print)
@@ -201,7 +201,8 @@ def batch_crop(x, out_size, corners, mode="bilinear", padding_mode="zeros"):
     # out_size is a tuple, (out_h, out_w)
     # crop corners tensor is N x <0 for h, 1 for w> x <0 for start loc, 1 for end loc>
     n, c, h, w = x.shape
-    assert n == 1
+    if n != 1:
+        raise ValueError("batch_crop() only works with a single image")
     # make base grid, <0 for h, 1 for w> x H x W
     ramp_h = torch.linspace(0, 1, out_size[0], device=x.device)
     ramp_w = torch.linspace(0, 1, out_size[1], device=x.device)
@@ -246,8 +247,8 @@ def mean_pad(x, pad):
 class Normalize(nn.Module):
     def __init__(self, mean, std):
         super().__init__()
-        self.register_buffer("mean", torch.as_tensor(mean).view(1, -1, 1, 1))
-        self.register_buffer("std", torch.as_tensor(std).view(1, -1, 1, 1))
+        self.register_buffer("mean", torch.as_tensor(mean).view(-1, 1, 1))
+        self.register_buffer("std", torch.as_tensor(std).view(-1, 1, 1))
 
     def forward(self, x):
         return (x - self.mean) / self.std
@@ -274,6 +275,41 @@ class CLIPWrapper(nn.Module):
         std = torch.tensor([0.26862954, 0.26130258, 0.27577711])
         preprocess = Normalize(mean * 2 - 1, std * 2).to(device)
         return cls(model, preprocess, **kwargs)
+
+    def encode_image(self, x):
+        if x.ndim == 3:
+            x = x[None]
+        n, c, h, w = x.shape
+        jitter = self.model.visual.conv1.kernel_size[0]
+        x = self.preprocess(x)
+
+        # Resize image
+        aspect = w / h
+        if w > h:
+            new_h = self.cut_size[0] + jitter
+            new_w = round(new_h * aspect)
+        else:
+            new_w = self.cut_size[1] + jitter
+            new_h = round(new_w / aspect)
+        x = F.interpolate(
+            x, (new_h, new_w), mode="bicubic", align_corners=False, antialias=True
+        )
+
+        # Crop image
+        jitterx = torch.rand([self.cutn], device=x.device) * jitter
+        jittery = torch.rand([self.cutn], device=x.device) * jitter
+        offsetx = torch.linspace(
+            0, new_w - self.cut_size[1], self.cutn, device=x.device
+        )
+        offsety = torch.linspace(
+            0, new_h - self.cut_size[0], self.cutn, device=x.device
+        )
+        offsets = torch.stack([offsety + jittery, offsetx + jitterx], dim=-1)
+        corners = torch.stack([offsets, offsets + x.new_tensor(self.cut_size)], dim=-1)
+        x = batch_crop(x, self.cut_size, corners)
+
+        image_embeds = self.model.encode_image(x)
+        return spherical_average(image_embeds)
 
     def encode_text(self, s):
         toks = clip.tokenize(s, truncate=True).to(self.model.logit_scale.device)
@@ -305,7 +341,7 @@ class CLIPWrapper(nn.Module):
 
         x = self.preprocess(x)
         cutouts = batch_crop(x, self.cut_size, corners)
-        image_embeds = self.model.encode_image(cutouts).to(x.dtype)
+        image_embeds = self.model.encode_image(cutouts)
         return spherical_average(image_embeds)
 
 
@@ -428,7 +464,7 @@ def main():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    p.add_argument("prompt", type=str, help="the text prompt")
+    p.add_argument("prompt", type=str, default="", help="the text prompts")
     p.add_argument(
         "--checkpoint",
         type=Path,
@@ -447,7 +483,7 @@ def main():
         "-cs",
         type=float,
         nargs="+",
-        default=[2500.0],
+        default=[2000.0],
         help="the CLIP guidance scale",
     )
     p.add_argument("--compile", action="store_true", help="torch.compile() the model")
@@ -464,6 +500,9 @@ def main():
         type=float,
         default=1.0,
         help="the multiplier for the noise variance. 0 gives ODE sampling, 1 gives standard diffusion SDE sampling.",
+    )
+    p.add_argument(
+        "--image-prompts", type=str, nargs="*", default=[], help="the image prompts"
     )
     p.add_argument("--init", type=Path, help="the initial image")
     p.add_argument(
@@ -546,16 +585,30 @@ def main():
     ]
 
     # Parse and encode prompts
-    prompts, weights, targets = [], [], []
+    prompts, image_prompts, weights, targets = [], [], [], []
     for prompt_and_weight in args.prompt.split("|"):
         a, b, c = prompt_and_weight.rpartition(":")
         if not b:
             a, c = c, "1"
-        prompts.append(a.strip())
-        weights.append(float(c.strip()))
+        prompt, weight = a.strip(), float(c.strip())
+        if prompt:
+            prompts.append(prompt)
+            weights.append(weight)
+    for prompt_and_weight in args.image_prompts:
+        a, b, c = prompt_and_weight.rpartition(":")
+        if not b:
+            a, c = c, "1"
+        prompt, weight = a.strip(), float(c.strip())
+        prompt = Image.open(prompt).convert("RGB")
+        prompt = TF.to_tensor(prompt).to(device)[None] * 2 - 1
+        image_prompts.append(prompt)
+        weights.append(weight)
     weights = torch.tensor(weights, device=device)
     for wrap in clip_wraps:
-        targets.append(spherical_average(wrap.encode_text(prompts), weights))
+        embeds = list(wrap.encode_text(prompts))
+        embeds.extend(wrap.encode_image(ip) for ip in image_prompts)
+        embeds = torch.stack(embeds)
+        targets.append(spherical_average(embeds, weights))
 
     # Wrap the model in a function that also computes and returns the cond_score
     def cond_model(x, sigma, **kwargs):
@@ -567,12 +620,12 @@ def main():
             loss = x.new_tensor(0.0)
             for wrap, target, scale in zip(clip_wraps, targets, args.clip_scale):
                 image_embed = wrap(denoised)
-                clip_score = torch.cosine_similarity(image_embed, target, dim=-1)
-                loss += clip_score * scale * size_fac
+                loss_cur = dist(image_embed, target) ** 2 / 2
+                loss += loss_cur * scale * size_fac
             return loss
 
         grad = torch.autograd.functional.vjp(loss_fn, x)[1]
-        return denoised.clamp(-1, 1), grad
+        return denoised.clamp(-1, 1), -grad
 
     if args.compile:
         cond_model = torch.compile(cond_model)
@@ -611,7 +664,7 @@ def main():
         print("Loading init image.")
         init_sigma = min(max(args.init_sigma, sigma_min), sigma_max)
         init = Image.open(args.init).convert("RGB").resize(args.size, Image.BICUBIC)
-        x = transforms.functional.to_tensor(init).to(device)[None] * 2 - 1
+        x = TF.to_tensor(init).to(device)[None] * 2 - 1
 
     # Draw random noise
     torch.manual_seed(args.seed)

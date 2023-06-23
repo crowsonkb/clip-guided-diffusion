@@ -51,7 +51,7 @@ The diffusion model this repo uses if none is specified is https://models.rivers
 
 - `--clip-model`: the CLIP model(s) to use (default: ViT-B/16)
 
-- `--clip-scale`: the CLIP guidance scale(s) (default: 2500.0)
+- `--clip-scale`: the CLIP guidance scale(s) (default: 2000.0)
 
 The CLIP guidance scale is automatically adjusted based on the image size, if you are generating a 1024x768 image it will be multiplied by (1024 * 768) / (512 * 512), or 3.
 
@@ -68,6 +68,8 @@ It will autodetect CUDA or CPU if not specified.
 - `--eta`: the multiplier for the noise variance. 0 gives ODE sampling, 1 gives standard diffusion SDE sampling. (default: 1.0)
 
 `eta` higher than 1 is supported and produces a "soft" effect when raised to 1.5 or 2.
+
+- `--image-prompts`: the image prompts and weights (path to image and weight separated by colons) to use (default: None)
 
 - `--init`: the initial image (default: None)
 
@@ -108,8 +110,6 @@ The higher order solvers are [linear multistep methods](https://en.wikipedia.org
 You can also use [Emily S](https://twitter.com/nshepperd1)'s OpenImages fine-tune of the 512x512 ImageNet diffusion model, which is available at https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_openimages_epoch28_withfilter.safetensors. It is a v objective model so you will need to specify `--model-type v`.
 
 ## To do
-
-- Image prompts
 
 - LPIPS loss for init images
 
