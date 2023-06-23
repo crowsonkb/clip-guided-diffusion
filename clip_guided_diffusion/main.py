@@ -276,11 +276,10 @@ class CLIPWrapper(nn.Module):
         preprocess = Normalize(mean * 2 - 1, std * 2).to(device)
         return cls(model, preprocess, **kwargs)
 
-    def encode_image(self, x):
+    def encode_image(self, x, jitter=16):
         if x.ndim == 3:
             x = x[None]
         n, c, h, w = x.shape
-        jitter = self.model.visual.conv1.kernel_size[0]
         x = self.preprocess(x)
 
         # Resize image
