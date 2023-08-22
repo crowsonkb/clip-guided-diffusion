@@ -121,6 +121,7 @@ def load_diffusion_model(model_path, device="cpu", model_type="eps"):
             "use_checkpoint": False,
             "use_fp16": True,
             "use_scale_shift_norm": True,
+            "use_neighborhood_attention": True,
         }
     )
     model, diffusion = script_util.create_model_and_diffusion(**model_config)
