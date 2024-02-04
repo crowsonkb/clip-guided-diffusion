@@ -7,21 +7,27 @@ import json
 import hashlib
 import math
 from pathlib import Path
+from typing import Literal
+import safetensors.torch as safetorch
+import fnmatch
+from typing import List, Callable
+from os import makedirs, listdir
 
 import clip
-from guided_diffusion import script_util
 import k_diffusion as K
 from PIL import ExifTags, Image
 import requests
 from rich import print
 from rich.align import Align
 from rich.panel import Panel
-import safetensors.torch
 import torch
 from torch import nn
 from torch.nn import functional as F
 from torchvision.transforms import functional as TF
 from tqdm.auto import tqdm
+
+repo_root = Path(__file__).parents[1]
+config_dir = repo_root / 'config'
 
 print = tqdm.external_write_mode()(print)
 srgb_profile = (Path(__file__).resolve().parent / "sRGB Profile.icc").read_bytes()
@@ -81,63 +87,6 @@ def save_image(image, path, prompt=None, args=None, steps=None):
         obj["steps"] = steps
     exif[ExifTags.Base.MakerNote] = json.dumps(obj, cls=JsonEncoderForMakerNote)
     image.save(path, exif=exif, icc_profile=srgb_profile)
-
-
-class OpenAIVDenoiser(K.external.DiscreteVDDPMDenoiser):
-    """A wrapper for OpenAI v objective diffusion models."""
-
-    def __init__(
-        self, model, diffusion, quantize=False, has_learned_sigmas=True, device="cpu"
-    ):
-        alphas_cumprod = torch.tensor(
-            diffusion.alphas_cumprod, device=device, dtype=torch.float32
-        )
-        super().__init__(model, alphas_cumprod, quantize=quantize)
-        self.has_learned_sigmas = has_learned_sigmas
-
-    def get_v(self, *args, **kwargs):
-        model_output = self.inner_model(*args, **kwargs)
-        if self.has_learned_sigmas:
-            return model_output.chunk(2, dim=1)[0]
-        return model_output
-
-
-def load_diffusion_model(model_path, device="cpu", model_type="eps"):
-    model_config = script_util.model_and_diffusion_defaults()
-    model_config.update(
-        {
-            "attention_resolutions": "32, 16, 8",
-            "class_cond": False,
-            "diffusion_steps": 1000,
-            "rescale_timesteps": True,
-            "timestep_respacing": "1000",
-            "image_size": 512,
-            "learn_sigma": True,
-            "noise_schedule": "linear",
-            "num_channels": 256,
-            "num_head_channels": 64,
-            "num_res_blocks": 2,
-            "resblock_updown": True,
-            "use_checkpoint": False,
-            "use_fp16": True,
-            "use_scale_shift_norm": True,
-            "use_neighborhood_attention": True,
-        }
-    )
-    model, diffusion = script_util.create_model_and_diffusion(**model_config)
-    model.requires_grad_(False).eval().to(device)
-    if Path(model_path).suffix == ".safetensors":
-        safetensors.torch.load_model(model, model_path)
-    else:
-        model.load_state_dict(torch.load(model_path, map_location="cpu"))
-    if model_config["use_fp16"]:
-        model.convert_to_fp16()
-    if model_type == "eps":
-        return K.external.OpenAIDenoiser(model, diffusion, device=device)
-    elif model_type == "v":
-        return OpenAIVDenoiser(model, diffusion, device=device)
-    else:
-        raise ValueError(f"Unknown model type {model_type}")
 
 
 def projx(x):
@@ -358,6 +307,7 @@ def sample_dpm_guided(
     noise_sampler=None,
     solver_type="midpoint",
     callback=None,
+    extra_args={},
 ):
     """DPM-Solver++(1/2/3M) SDE (Kat's splitting version)."""
     noise_sampler = (
@@ -402,7 +352,7 @@ def sample_dpm_guided(
     while t < t_end - 1e-5:
         # Call model and cond_fn
         sigma = t_to_sigma(t)
-        denoised, cond_score = model(x, sigma * s_in)
+        denoised, cond_score = model(x, sigma * s_in, **extra_args)
 
         # Scale step size down if cond_score is too large
         cond_eps_norm = cond_score.mul(sigma).pow(2).mean().sqrt() + 1e-8
@@ -471,6 +421,10 @@ def main():
         help="the diffusion model checkpoint to load",
     )
     p.add_argument(
+        '--config',
+        type=Path,
+        help='configuration file for inference-only checkpoints')
+    p.add_argument(
         "--clip-model",
         type=str,
         nargs="+",
@@ -531,7 +485,7 @@ def main():
         help="the model type",
     )
     p.add_argument(
-        "--output", "-o", type=Path, default=Path("out.png"), help="the output file"
+        "--output", "-o", type=Path, default=Path("out"), help="the output directory"
     )
     p.add_argument(
         "--save-all", action="store_true", help="save all intermediate denoised images"
@@ -567,14 +521,37 @@ def main():
     # Load diffusion model
     print("Loading diffusion model.")
     checkpoint = args.checkpoint
-    if checkpoint is None:
+    if checkpoint is None and args.config is None:
         checkpoint = download_file(
             url="https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_finetune_008100.safetensors",
             root=Path(torch.hub.get_dir()) / "checkpoints" / "rivershavewings",
             expected_sha256="02e212cbec7c9012eb12cd63fef6fa97640b4e8fcd6c6e1f410a52eea1925fe1",
         )
-    model = load_diffusion_model(checkpoint, device=device, model_type=args.model_type)
-    sigma_min, sigma_max = model.sigmas[0].item(), model.sigmas[-1].item()
+        config_path = config_dir / "guided_diffusion_kat.json"
+    else:
+        assert args.config is not None, "--checkpoint requires a corresponding config.json to be passed via --config"
+        config_path = args.config
+    config = K.config.load_config(config_path)
+    model_config = config['model']
+
+    if model_config['type'] == 'guided_diffusion':
+        from .load_diffusion_model import construct_diffusion_model, load_diffusion_model, wrap_diffusion_model
+        # can't easily put this into K.config.make_model; would change return type and introduce dependency
+        gdiff_model, guided_diff = construct_diffusion_model(model_config['config'])
+        model_type: Literal['eps', 'v'] = model_config["objective"]
+        load_diffusion_model(checkpoint, gdiff_model)
+        gdiff_model.requires_grad_(False).eval().to(device)
+        model = wrap_diffusion_model(gdiff_model, guided_diff, device=device, model_type=model_type)
+        sigma_min, sigma_max = model.sigma_min.item(), model.sigma_max.item()
+        class_cond_key = 'y'
+    else:
+        kdiff_model = K.config.make_model(config)
+        ckpt = safetorch.load_file(checkpoint)
+        kdiff_model.load_state_dict(ckpt)
+        kdiff_model.requires_grad_(False).eval().to(device)
+        model = K.config.make_denoiser_wrapper(config)(kdiff_model)
+        sigma_min, sigma_max = model_config['sigma_min'], model_config['sigma_max']
+        class_cond_key = 'class_cond'
     size_fac = (args.size[0] * args.size[1]) / (512 * 512)
 
     # Load CLIP
@@ -671,10 +648,24 @@ def main():
     x = x + torch.randn_like(x) * init_sigma
     ns = K.sampling.BrownianTreeNoiseSampler(x, sigma_min, sigma_max)
 
+    makedirs(str(args.output), exist_ok=True)
+    out_imgs_unsorted: List[str] = fnmatch.filter(listdir(str(args.output)), f'*_*.*')
+    get_out_ix: Callable[[str], int] = lambda stem: int(stem.split('_', maxsplit=1)[0])
+    out_keyer: Callable[[str], int] = lambda fname: get_out_ix(Path(fname).stem)
+    out_imgs: List[str] = sorted(out_imgs_unsorted, key=out_keyer)
+    next_ix = get_out_ix(Path(out_imgs[-1]).stem)+1 if out_imgs else 0
+    out_filename: str = f'{next_ix:05d}_{args.seed}_{args.clip_scale}.png'
+    out_path: Path = args.output / out_filename
+
     with Callback() as cb:
         # Sample
         print("Sampling.")
         try:
+            extra_args = {} if config['dataset']['num_classes'] == 0 else {
+                # assumes that the class-conditional model's final class is an uncond.
+                # this is **not** true for OpenAI guided-diffusion ImageNet, where you will get toilet paper instead
+                class_cond_key: torch.tensor(config['dataset']['num_classes'] - 1, device=device),
+            }
             samples = sample_dpm_guided(
                 model=cond_model,
                 x=x,
@@ -686,11 +677,12 @@ def main():
                 noise_sampler=ns,
                 solver_type=args.solver,
                 callback=cb,
+                extra_args=extra_args,
             )
 
             # Save the image
-            print(f"Saving to {args.output}...")
-            save_fn(samples[0], args.output, steps=cb.steps)
+            print(f"Saving to {str(out_path)}...")
+            save_fn(samples[0], str(out_path), steps=cb.steps)
         except KeyboardInterrupt:
             print("Interrupted")
 

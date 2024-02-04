@@ -1,0 +1,27 @@
+{
+  "model": {
+    "type": "guided_diffusion",
+    "config": {
+      "attention_resolutions": "32, 16, 8",
+      "class_cond": false,
+      "diffusion_steps": 1000,
+      "rescale_timesteps": true,
+      "timestep_respacing": "1000",
+      "image_size": 512,
+      "learn_sigma": true,
+      "noise_schedule": "linear",
+      "num_channels": 256,
+      "num_head_channels": 64,
+      "num_res_blocks": 2,
+      "resblock_updown": true,
+      "use_checkpoint": false,
+      "use_fp16": true,
+      "use_scale_shift_norm": true,
+      "use_neighborhood_attention": true,
+      "use_torch_sdp_attention": false
+    },
+    "input_channels": 3,
+    "input_size": [512, 512],
+    "objective": "eps"
+  }
+}
