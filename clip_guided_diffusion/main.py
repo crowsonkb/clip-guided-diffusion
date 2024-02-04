@@ -9,6 +9,9 @@ import math
 from pathlib import Path
 from typing import Literal
 import safetensors.torch as safetorch
+import fnmatch
+from typing import List, Callable
+from os import makedirs, listdir
 
 import clip
 import k_diffusion as K
@@ -216,8 +219,8 @@ class CLIPWrapper(nn.Module):
         return (self.model.visual.input_resolution,) * 2
 
     @classmethod
-    def from_pretrained(cls, clip_name, device="cpu", jit=False, **kwargs):
-        model = clip.load(clip_name, device=device, jit=jit)[0].eval().requires_grad_(False)
+    def from_pretrained(cls, clip_name, device="cpu", **kwargs):
+        model = clip.load(clip_name, device=device)[0].eval().requires_grad_(False)
         mean = torch.tensor([0.48145466, 0.4578275, 0.40821073])
         std = torch.tensor([0.26862954, 0.26130258, 0.27577711])
         preprocess = Normalize(mean * 2 - 1, std * 2).to(device)
@@ -437,7 +440,6 @@ def main():
         help="the CLIP guidance scale",
     )
     p.add_argument("--compile", action="store_true", help="torch.compile() the model")
-    p.add_argument("--clip_jit", action="store_true", help="download JITed CLIP")
     p.add_argument(
         "--cutn",
         type=int,
@@ -482,7 +484,7 @@ def main():
         help="the model type",
     )
     p.add_argument(
-        "--output", "-o", type=Path, default=Path("out.png"), help="the output file"
+        "--output", "-o", type=Path, default=Path("out"), help="the output directory"
     )
     p.add_argument(
         "--save-all", action="store_true", help="save all intermediate denoised images"
@@ -553,7 +555,7 @@ def main():
     # Load CLIP
     print("Loading CLIP.")
     clip_wraps = [
-        CLIPWrapper.from_pretrained(name, device=device, cutn=cutn, jit=bool(args.clip_jit))
+        CLIPWrapper.from_pretrained(name, device=device, cutn=cutn)
         for name, cutn in zip(args.clip_model, args.cutn)
     ]
 
@@ -644,6 +646,15 @@ def main():
     x = x + torch.randn_like(x) * init_sigma
     ns = K.sampling.BrownianTreeNoiseSampler(x, sigma_min, sigma_max)
 
+    makedirs(str(args.output), exist_ok=True)
+    out_imgs_unsorted: List[str] = fnmatch.filter(listdir(str(args.output)), f'*_*.*')
+    get_out_ix: Callable[[str], int] = lambda stem: int(stem.split('_', maxsplit=1)[0])
+    out_keyer: Callable[[str], int] = lambda fname: get_out_ix(Path(fname).stem)
+    out_imgs: List[str] = sorted(out_imgs_unsorted, key=out_keyer)
+    next_ix = get_out_ix(Path(out_imgs[-1]).stem)+1 if out_imgs else 0
+    out_filename: str = f'{next_ix:05d}_{args.seed}_{args.clip_scale}.png'
+    out_path: Path = args.output / out_filename
+
     with Callback() as cb:
         # Sample
         print("Sampling.")
@@ -662,8 +673,8 @@ def main():
             )
 
             # Save the image
-            print(f"Saving to {args.output}...")
-            save_fn(samples[0], args.output, steps=cb.steps)
+            print(f"Saving to {str(args.output)}...")
+            save_fn(samples[0], str(out_path), steps=cb.steps)
         except KeyboardInterrupt:
             print("Interrupted")
 

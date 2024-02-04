@@ -4,3 +4,4 @@ build
 out*.png
 out*.mp4
 /venv/
+/out/
