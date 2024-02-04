@@ -10,6 +10,20 @@
         "A beautiful fantasy painting of the wind by Wojciech Siudmak",
         "--seed", "436376137",
       ]
+    },
+    {
+      "name": "Python: CLIP guided diffusion (HDiT)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "clip_guided_diffusion.main",
+      "justMyCode": false,
+      "args": [
+        "A beautiful fantasy painting of the wind by Wojciech Siudmak",
+        "--checkpoint", "/sdb/ckpt/imagenet_test_v2_007_02200000.safetensors",
+        "--config", "config/hdit_557m.json",
+        "--seed", "436376137",
+        "--size", "256", "256"
+      ]
     }
   ]
 }

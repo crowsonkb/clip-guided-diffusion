@@ -307,6 +307,7 @@ def sample_dpm_guided(
     noise_sampler=None,
     solver_type="midpoint",
     callback=None,
+    extra_args={},
 ):
     """DPM-Solver++(1/2/3M) SDE (Kat's splitting version)."""
     noise_sampler = (
@@ -351,7 +352,7 @@ def sample_dpm_guided(
     while t < t_end - 1e-5:
         # Call model and cond_fn
         sigma = t_to_sigma(t)
-        denoised, cond_score = model(x, sigma * s_in)
+        denoised, cond_score = model(x, sigma * s_in, **extra_args)
 
         # Scale step size down if cond_score is too large
         cond_eps_norm = cond_score.mul(sigma).pow(2).mean().sqrt() + 1e-8
@@ -526,10 +527,11 @@ def main():
             root=Path(torch.hub.get_dir()) / "checkpoints" / "rivershavewings",
             expected_sha256="02e212cbec7c9012eb12cd63fef6fa97640b4e8fcd6c6e1f410a52eea1925fe1",
         )
-        config = K.config.load_config(config_dir / "guided_diffusion_kat.json")
+        config_path = config_dir / "guided_diffusion_kat.json"
     else:
         assert args.config is not None, "--checkpoint requires a corresponding config.json to be passed via --config"
-        config = K.config.load_config(args.config)
+        config_path = args.config
+    config = K.config.load_config(config_path)
     model_config = config['model']
 
     if model_config['type'] == 'guided_diffusion':
@@ -544,7 +546,7 @@ def main():
         class_cond_key = 'y'
     else:
         kdiff_model = K.config.make_model(config)
-        ckpt = safetorch.load_file(args.resume_inference)
+        ckpt = safetorch.load_file(checkpoint)
         kdiff_model.load_state_dict(ckpt)
         kdiff_model.requires_grad_(False).eval().to(device)
         model = K.config.make_denoiser_wrapper(config)(kdiff_model)
@@ -659,6 +661,11 @@ def main():
         # Sample
         print("Sampling.")
         try:
+            extra_args = {} if config['dataset']['num_classes'] == 0 else {
+                # assumes that the class-conditional model's final class is an uncond.
+                # this is **not** true for OpenAI guided-diffusion ImageNet, where you will get toilet paper instead
+                class_cond_key: torch.tensor(config['dataset']['num_classes'] - 1, device=device),
+            }
             samples = sample_dpm_guided(
                 model=cond_model,
                 x=x,
@@ -670,10 +677,11 @@ def main():
                 noise_sampler=ns,
                 solver_type=args.solver,
                 callback=cb,
+                extra_args=extra_args,
             )
 
             # Save the image
-            print(f"Saving to {str(args.output)}...")
+            print(f"Saving to {str(out_path)}...")
             save_fn(samples[0], str(out_path), steps=cb.steps)
         except KeyboardInterrupt:
             print("Interrupted")

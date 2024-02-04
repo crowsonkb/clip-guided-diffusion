@@ -20,5 +20,8 @@
     "input_channels": 3,
     "input_size": [256, 256],
     "objective": "eps"
+  },
+  "dataset": {
+    "num_classes": 1000
   }
 }

@@ -1,0 +1,25 @@
+{
+  "model": {
+    "type": "image_transformer_v2",
+    "input_channels": 3,
+    "input_size": [256, 256],
+    "patch_size": [4, 4],
+    "depths": [2, 2, 16],
+    "widths": [384, 768, 1536],
+    "loss_config": "karras",
+    "loss_weighting": "soft-min-snr",
+    "loss_scales": 1,
+    "dropout_rate": [0.0, 0.0, 0.0],
+    "mapping_dropout_rate": 0.0,
+    "augment_prob": 0.0,
+    "sigma_data": 0.5,
+    "sigma_min": 1e-2,
+    "sigma_max": 160,
+    "sigma_sample_density": {
+      "type": "cosine-interpolated"
+    }
+  },
+  "dataset": {
+    "num_classes": 1000
+  }
+}
