@@ -7,21 +7,24 @@ import json
 import hashlib
 import math
 from pathlib import Path
+from typing import Literal
+import safetensors.torch as safetorch
 
 import clip
-from guided_diffusion import script_util
 import k_diffusion as K
 from PIL import ExifTags, Image
 import requests
 from rich import print
 from rich.align import Align
 from rich.panel import Panel
-import safetensors.torch
 import torch
 from torch import nn
 from torch.nn import functional as F
 from torchvision.transforms import functional as TF
 from tqdm.auto import tqdm
+
+repo_root = Path(__file__).parents[1]
+config_dir = repo_root / 'config'
 
 print = tqdm.external_write_mode()(print)
 srgb_profile = (Path(__file__).resolve().parent / "sRGB Profile.icc").read_bytes()
@@ -81,63 +84,6 @@ def save_image(image, path, prompt=None, args=None, steps=None):
         obj["steps"] = steps
     exif[ExifTags.Base.MakerNote] = json.dumps(obj, cls=JsonEncoderForMakerNote)
     image.save(path, exif=exif, icc_profile=srgb_profile)
-
-
-class OpenAIVDenoiser(K.external.DiscreteVDDPMDenoiser):
-    """A wrapper for OpenAI v objective diffusion models."""
-
-    def __init__(
-        self, model, diffusion, quantize=False, has_learned_sigmas=True, device="cpu"
-    ):
-        alphas_cumprod = torch.tensor(
-            diffusion.alphas_cumprod, device=device, dtype=torch.float32
-        )
-        super().__init__(model, alphas_cumprod, quantize=quantize)
-        self.has_learned_sigmas = has_learned_sigmas
-
-    def get_v(self, *args, **kwargs):
-        model_output = self.inner_model(*args, **kwargs)
-        if self.has_learned_sigmas:
-            return model_output.chunk(2, dim=1)[0]
-        return model_output
-
-
-def load_diffusion_model(model_path, device="cpu", model_type="eps"):
-    model_config = script_util.model_and_diffusion_defaults()
-    model_config.update(
-        {
-            "attention_resolutions": "32, 16, 8",
-            "class_cond": False,
-            "diffusion_steps": 1000,
-            "rescale_timesteps": True,
-            "timestep_respacing": "1000",
-            "image_size": 512,
-            "learn_sigma": True,
-            "noise_schedule": "linear",
-            "num_channels": 256,
-            "num_head_channels": 64,
-            "num_res_blocks": 2,
-            "resblock_updown": True,
-            "use_checkpoint": False,
-            "use_fp16": True,
-            "use_scale_shift_norm": True,
-            "use_neighborhood_attention": True,
-        }
-    )
-    model, diffusion = script_util.create_model_and_diffusion(**model_config)
-    model.requires_grad_(False).eval().to(device)
-    if Path(model_path).suffix == ".safetensors":
-        safetensors.torch.load_model(model, model_path)
-    else:
-        model.load_state_dict(torch.load(model_path, map_location="cpu"))
-    if model_config["use_fp16"]:
-        model.convert_to_fp16()
-    if model_type == "eps":
-        return K.external.OpenAIDenoiser(model, diffusion, device=device)
-    elif model_type == "v":
-        return OpenAIVDenoiser(model, diffusion, device=device)
-    else:
-        raise ValueError(f"Unknown model type {model_type}")
 
 
 def projx(x):
@@ -270,8 +216,8 @@ class CLIPWrapper(nn.Module):
         return (self.model.visual.input_resolution,) * 2
 
     @classmethod
-    def from_pretrained(cls, clip_name, device="cpu", **kwargs):
-        model = clip.load(clip_name, device=device)[0].eval().requires_grad_(False)
+    def from_pretrained(cls, clip_name, device="cpu", jit=False, **kwargs):
+        model = clip.load(clip_name, device=device, jit=jit)[0].eval().requires_grad_(False)
         mean = torch.tensor([0.48145466, 0.4578275, 0.40821073])
         std = torch.tensor([0.26862954, 0.26130258, 0.27577711])
         preprocess = Normalize(mean * 2 - 1, std * 2).to(device)
@@ -471,6 +417,10 @@ def main():
         help="the diffusion model checkpoint to load",
     )
     p.add_argument(
+        '--config',
+        type=Path,
+        help='configuration file for inference-only checkpoints')
+    p.add_argument(
         "--clip-model",
         type=str,
         nargs="+",
@@ -487,6 +437,7 @@ def main():
         help="the CLIP guidance scale",
     )
     p.add_argument("--compile", action="store_true", help="torch.compile() the model")
+    p.add_argument("--clip_jit", action="store_true", help="download JITed CLIP")
     p.add_argument(
         "--cutn",
         type=int,
@@ -567,20 +518,42 @@ def main():
     # Load diffusion model
     print("Loading diffusion model.")
     checkpoint = args.checkpoint
-    if checkpoint is None:
+    if checkpoint is None and args.config is None:
         checkpoint = download_file(
             url="https://models.rivershavewings.workers.dev/512x512_diffusion_uncond_finetune_008100.safetensors",
             root=Path(torch.hub.get_dir()) / "checkpoints" / "rivershavewings",
             expected_sha256="02e212cbec7c9012eb12cd63fef6fa97640b4e8fcd6c6e1f410a52eea1925fe1",
         )
-    model = load_diffusion_model(checkpoint, device=device, model_type=args.model_type)
-    sigma_min, sigma_max = model.sigmas[0].item(), model.sigmas[-1].item()
+        config = K.config.load_config(config_dir / "guided_diffusion_kat.json")
+    else:
+        assert args.config is not None, "--checkpoint requires a corresponding config.json to be passed via --config"
+        config = K.config.load_config(args.config)
+    model_config = config['model']
+
+    if model_config['type'] == 'guided_diffusion':
+        from .load_diffusion_model import construct_diffusion_model, load_diffusion_model, wrap_diffusion_model
+        # can't easily put this into K.config.make_model; would change return type and introduce dependency
+        gdiff_model, guided_diff = construct_diffusion_model(model_config['config'])
+        model_type: Literal['eps', 'v'] = model_config["objective"]
+        load_diffusion_model(checkpoint, gdiff_model)
+        gdiff_model.requires_grad_(False).eval().to(device)
+        model = wrap_diffusion_model(gdiff_model, guided_diff, device=device, model_type=model_type)
+        sigma_min, sigma_max = model.sigma_min.item(), model.sigma_max.item()
+        class_cond_key = 'y'
+    else:
+        kdiff_model = K.config.make_model(config)
+        ckpt = safetorch.load_file(args.resume_inference)
+        kdiff_model.load_state_dict(ckpt)
+        kdiff_model.requires_grad_(False).eval().to(device)
+        model = K.config.make_denoiser_wrapper(config)(kdiff_model)
+        sigma_min, sigma_max = model_config['sigma_min'], model_config['sigma_max']
+        class_cond_key = 'class_cond'
     size_fac = (args.size[0] * args.size[1]) / (512 * 512)
 
     # Load CLIP
     print("Loading CLIP.")
     clip_wraps = [
-        CLIPWrapper.from_pretrained(name, device=device, cutn=cutn)
+        CLIPWrapper.from_pretrained(name, device=device, cutn=cutn, jit=bool(args.clip_jit))
         for name, cutn in zip(args.clip_model, args.cutn)
     ]
 

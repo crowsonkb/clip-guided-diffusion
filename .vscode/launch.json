@@ -1,0 +1,15 @@
+{
+  "configurations": [
+    {
+      "name": "Python: CLIP guided diffusion (Kat)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "clip_guided_diffusion.main",
+      "justMyCode": false,
+      "args": [
+        "A beautiful fantasy painting of the wind by Wojciech Siudmak",
+        "--seed", "436376137",
+      ]
+    }
+  ]
+}
