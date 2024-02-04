@@ -16,18 +16,73 @@ This new codebase uses a [k-diffusion](https://github.com/crowsonkb/k-diffusion)
 
 ## Installation
 
+### Clone repository
+
+```bash
+git clone https://github.com/Birch-san/clip-guided-diffusion.git
+cd clip-guided-diffusion
 ```
-[clone this repository]
-pip install -e [cloned repository]
+
+### Create & activate a virtual environment
+
+```bash
+python3 -m venv venv
+. venv/bin/activate
+# setup will fail to resolve modules such as torch unless you have wheel package
+pip install wheel
+```
+
+### Install NATTEN
+
+With your clip-guided-diffusion virtualenv active, do one of the following:
+
+**[Option 1] Try installing wheel:**
+
+You could _try_ installing a wheel of NATTEN, but for me this still attempted a build-from-source (and failed due to not finding CUDA compiler).
+
+```bash
+pip install natten -f https://shi-labs.com/natten/wheels/cu122/torch2.2.0/index.html
+```
+
+**[Option 2] Build from source:**
+
+Clone NATTEN somewhere (ideally not inside this repository):
+
+```bash
+git clone https://github.com/SHI-Labs/NATTEN.git
+cd NATTEN
+```
+
+Install cmake for your OS if you don't already have it, and install in your venv the version of cmake that NATTEN prefers. I tried newer cmake myself and it seemed to have trouble locating CUDA, so that might be why they pinned an older version.
+
+```bash
+sudo apt-get install cmake
+pip install cmake==3.20.3
+```
+
+Build NATTEN from source
+
+```bash
+CUDACXX=/usr/local/cuda/bin/nvcc make install CUDA_ARCH="8.9" WORKERS=4
+```
+
+### Install the rest of the dependencies
+
+Go back to the clip-guided-diffusion repository, ensure your virtualenv is activate, and install the remaining dependencies:
+
+```bash
+pip install .
 ```
 
 ## Usage
 
-```clip_guided_diffusion [prompt] [options]```
+```bash
+clip_guided_diffusion [prompt] [options]
+```
 
 Try:
 
-```
+```bash
 clip_guided_diffusion "A beautiful fantasy painting of the wind by Wojciech Siudmak" --seed 15554
 ```
 
@@ -35,7 +90,7 @@ clip_guided_diffusion "A beautiful fantasy painting of the wind by Wojciech Siud
 
 Multiple prompts can be specified by separating them with `|`, and relative weights per prompt can be specified by appending `:` and the weight to the prompt. For example:
 
-```
+```bash
 clip_guided_diffusion "First prompt:1|Second prompt:2"
 ```
 
