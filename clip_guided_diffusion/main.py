@@ -140,6 +140,29 @@ def load_diffusion_model(model_path, device="cpu", model_type="eps"):
         raise ValueError(f"Unknown model type {model_type}")
 
 
+def load_k_diffusion_model(model_path, config=None, device="cpu"):
+    config = K.config.load_config(config if config is not None else model_path)
+    inner_model = K.config.make_model(config).half()
+    inner_model.load_state_dict(safetensors.torch.load_file(model_path))
+    inner_model = inner_model.eval().requires_grad_(False).to(device)
+    model = K.config.make_denoiser_wrapper(config)(inner_model)
+    return model, config
+
+
+def make_k_diffusion_model_fn(model):
+    num_classes = model.inner_model.num_classes
+    autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+    def model_fn(x, sigma, **kwargs):
+        with torch.cuda.amp.autocast(dtype=autocast_dtype):
+            if num_classes > 0:
+                class_cond = x.new_full((x.shape[0],), num_classes - 1, dtype=torch.long)
+                return model(x, sigma, class_cond=class_cond, **kwargs)
+            return model(x, sigma, **kwargs)
+
+    return model_fn
+
+
 def projx(x):
     return x / x.norm(dim=-1, keepdim=True)
 
@@ -526,7 +549,7 @@ def main():
     p.add_argument(
         "--model-type",
         type=str,
-        choices=["eps", "v"],
+        choices=["eps", "v", "k-diffusion"],
         default="eps",
         help="the model type",
     )
@@ -573,8 +596,13 @@ def main():
             root=Path(torch.hub.get_dir()) / "checkpoints" / "rivershavewings",
             expected_sha256="02e212cbec7c9012eb12cd63fef6fa97640b4e8fcd6c6e1f410a52eea1925fe1",
         )
-    model = load_diffusion_model(checkpoint, device=device, model_type=args.model_type)
-    sigma_min, sigma_max = model.sigmas[0].item(), model.sigmas[-1].item()
+    if args.model_type == "k-diffusion":
+        model_, config = load_k_diffusion_model(checkpoint, device=device)
+        sigma_min, sigma_max = config['model']['sigma_min'], config['model']['sigma_max']
+        model = make_k_diffusion_model_fn(model_)
+    else:
+        model = load_diffusion_model(checkpoint, device=device, model_type=args.model_type)
+        sigma_min, sigma_max = model.sigmas[0].item(), model.sigmas[-1].item()
     size_fac = (args.size[0] * args.size[1]) / (512 * 512)
 
     # Load CLIP
